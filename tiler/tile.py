@@ -141,6 +141,10 @@ def main():
     ap.add_argument("--max-points", type=int, default=0, help="randomly keep at most this many points")
     ap.add_argument("--feet", action="store_true", help="source coordinates are in feet")
     ap.add_argument("--crs", default="", help="a note on the coordinate system, shown in the viewer")
+    ap.add_argument("--utm", default="", help='UTM/MGA zone like "56S", so the viewer can show latitude and longitude')
+    ap.add_argument("--title", default="", help="name shown in the viewer")
+    ap.add_argument("--place", default="", help="subtitle, e.g. suburb")
+    ap.add_argument("--credit", default="", help="data credit shown on screen")
     a = ap.parse_args()
     t0 = time.time()
     print("reading")
@@ -149,6 +153,11 @@ def main():
     lo, size, level, unit = build(pts)
     print("writing")
     meta = write(a.out, pts, lo, size, level, unit, a.crs)
+    extra = {"title": a.title, "place": a.place, "credit": a.credit}
+    if a.utm:
+        extra["utm"] = {"zone": int(a.utm[:-1]), "south": a.utm[-1].upper() == "S"}
+    meta.update({k: v for k, v in extra.items() if v})
+    (Path(a.out) / "cloud.json").write_text(json.dumps(meta, separators=(",", ":")))
     mb = sum(p.stat().st_size for p in Path(a.out, "n").iterdir()) / 1e6
     print(f"done: {meta['points']:,} points in {len(meta['nodes'])} nodes, {mb:.0f} MB, {time.time() - t0:.0f} s")
 

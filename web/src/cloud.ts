@@ -13,6 +13,10 @@ export interface CloudMeta {
   classes: number[];
   crs: string;
   nodes: [number, number, number, number, number][];
+  title?: string;
+  place?: string;
+  credit?: string;
+  utm?: { zone: number; south: boolean };
 }
 
 export const GRID = 128; // sample cells per node edge, as in the tiler
@@ -23,6 +27,7 @@ export class Node {
   loading = false;
   failed = false;
   lastUsed = 0;
+  born = -100; // page clock (seconds) when its points arrived
   deepestShown = 0; // finest level currently drawn in this node's region
   readonly box: THREE.Box3;
   readonly spacing: number; // rough distance between this node's points, metres
@@ -48,6 +53,7 @@ export class Cloud {
   readonly all: Node[];
   readonly hasRgb: boolean;
   readonly group = new THREE.Group();
+  readonly loaded = new Set<Node>();
 
   constructor(readonly url: string, readonly meta: CloudMeta, readonly material: THREE.ShaderMaterial) {
     this.hasRgb = meta.attributes.some((a) => a.startsWith('rgb'));
@@ -78,7 +84,9 @@ export class Cloud {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buf = new Uint8Array(await res.arrayBuffer());
       node.points = this.decode(node, buf);
+      node.born = performance.now() / 1000;
       this.group.add(node.points);
+      this.loaded.add(node);
     } catch (e) {
       node.failed = true;
       console.warn(`node ${node.name}:`, e);
@@ -90,6 +98,7 @@ export class Cloud {
   unload(node: Node) {
     if (!node.points) return;
     this.group.remove(node.points);
+    this.loaded.delete(node);
     node.points.geometry.dispose();
     node.points = null;
   }
@@ -123,6 +132,7 @@ export class Cloud {
     pts.frustumCulled = false; // the LOD pass already culled by node
     pts.onBeforeRender = () => {
       this.material.uniforms.spacing.value = this.meta.size / (1 << node.deepestShown) / GRID;
+      this.material.uniforms.born.value = node.born;
       this.material.uniformsNeedUpdate = true;
     };
     pts.userData.node = node;

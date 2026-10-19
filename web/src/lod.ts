@@ -1,6 +1,7 @@
 // Level of detail: each frame, decide which octree nodes to show.
 // Nodes are visited biggest-on-screen first until the point budget is spent; anything
 // visible that isn't loaded yet is queued, and nodes nobody has looked at for a while are freed.
+// Work per frame scales with what's on screen, not with the size of the whole cloud.
 import * as THREE from 'three';
 import type { Cloud, Node } from './cloud';
 
@@ -8,16 +9,54 @@ export interface LodStats { visible: number; points: number; loading: number; lo
 
 const MAX_LOADS = 6;      // requests in flight
 const MIN_PIXELS = 90;    // a node smaller than this on screen isn't worth opening
-const KEEP_LOADED = 900;  // node geometries kept in memory before the oldest are freed
+const KEEP_LOADED = 1500; // node geometries kept in memory before the oldest are freed
 
 const frustum = new THREE.Frustum();
 const projScreen = new THREE.Matrix4();
 const centre = new THREE.Vector3();
+const size = new THREE.Vector3();
+
+// Max-heap of nodes by on-screen size.
+class Heap {
+  private items: { node: Node; weight: number }[] = [];
+  get length() { return this.items.length; }
+  push(node: Node, weight: number) {
+    const a = this.items;
+    a.push({ node, weight });
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (a[p].weight >= a[i].weight) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+  pop(): Node {
+    const a = this.items;
+    const top = a[0];
+    const last = a.pop()!;
+    if (a.length) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < a.length && a[l].weight > a[m].weight) m = l;
+        if (r < a.length && a[r].weight > a[m].weight) m = r;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i], a[m]];
+        i = m;
+      }
+    }
+    return top.node;
+  }
+}
 
 export class Lod {
   budget = 4_000_000;
   private frame = 0;
   private inFlight = 0;
+  private shown: Node[] = [];
 
   constructor(private cloud: Cloud) {}
 
@@ -28,34 +67,34 @@ export class Lod {
     frustum.setFromProjectionMatrix(projScreen);
     const focal = viewportHeight / 2 / Math.tan((camera.fov * Math.PI) / 360);
 
-    // Visit nodes in order of how big they look; parents always come before children.
-    const queue: { node: Node; weight: number }[] = [{ node: this.cloud.root, weight: Infinity }];
+    for (const n of this.shown) if (n.points) n.points.visible = false;
+    this.shown = [];
+
+    const heap = new Heap();
+    heap.push(this.cloud.root, Infinity);
     const wanted: Node[] = [];
-    let points = 0, visible = 0;
-    for (const n of this.cloud.all) if (n.points) n.points.visible = false;
+    let points = 0;
 
-    while (queue.length) {
-      let best = 0;
-      for (let i = 1; i < queue.length; i++) if (queue[i].weight > queue[best].weight) best = i;
-      const { node } = queue[best];
-      queue[best] = queue[queue.length - 1];
-      queue.pop();
-
+    while (heap.length) {
+      const node = heap.pop();
       if (points + node.count > this.budget) continue;
-      if (!node.points) { if (!node.failed) wanted.push(node); continue; }
+      if (!node.points) {
+        if (!node.failed && wanted.length < 64) wanted.push(node);
+        continue;
+      }
       node.points.visible = true;
       node.lastUsed = this.frame;
+      this.shown.push(node);
       points += node.count;
-      visible++;
 
       for (const child of node.children) {
         if (!frustum.intersectsBox(child.box)) continue;
-        const radius = child.box.getSize(centre).length() / 2;
+        const radius = child.box.getSize(size).length() / 2;
         child.box.getCenter(centre);
         const dist = Math.max(centre.distanceTo(camera.position) - radius, 0.001);
         const pixels = (radius * focal) / dist;
         if (pixels < MIN_PIXELS) continue;
-        queue.push({ node: child, weight: pixels });
+        heap.push(child, pixels);
       }
     }
 
@@ -77,13 +116,13 @@ export class Lod {
       this.cloud.load(node).finally(() => this.inFlight--);
     }
 
-    // Free memory from nodes that haven't been on screen for a while.
-    const loaded = this.cloud.all.filter((n) => n.points);
-    if (loaded.length > KEEP_LOADED) {
-      loaded.sort((a, b) => a.lastUsed - b.lastUsed);
-      for (const n of loaded.slice(0, loaded.length - KEEP_LOADED)) if (n.lastUsed < this.frame - 2 && n.level > 0) this.cloud.unload(n);
+    // Free memory from nodes that haven't been on screen for a while (checked once a second).
+    const loaded = this.cloud.loaded;
+    if (this.frame % 60 === 0 && loaded.size > KEEP_LOADED) {
+      const old = [...loaded].filter((n) => n.level > 0 && n.lastUsed < this.frame - 2).sort((a, b) => a.lastUsed - b.lastUsed);
+      for (const n of old.slice(0, loaded.size - KEEP_LOADED)) this.cloud.unload(n);
     }
 
-    return { visible, points, loading: this.inFlight, loaded: loaded.length };
+    return { visible: this.shown.length, points, loading: this.inFlight, loaded: loaded.size };
   }
 }

@@ -1,2 +1,6 @@
 import { defineConfig } from 'vite';
-export default defineConfig({ base: './', server: { port: 5190 } });
+export default defineConfig({
+  base: './',
+  // wait for editors (and scripts) to finish writing before reloading, or Vite can cache a half-written file
+  server: { port: 5190, watch: { awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 } } },
+});

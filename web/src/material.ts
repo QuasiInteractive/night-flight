@@ -7,24 +7,24 @@ export type ColorMode = (typeof COLOR_MODES)[number];
 
 // ASPRS LAS classes. Names are what the viewer shows; colours are picked to read on a dark background.
 export const CLASSES: Record<number, { name: string; color: string }> = {
-  0: { name: 'Never classified', color: '#8a8f98' },
-  1: { name: 'Unclassified', color: '#9aa1ab' },
-  2: { name: 'Ground', color: '#b08a5a' },
-  3: { name: 'Low vegetation', color: '#7fbf6a' },
-  4: { name: 'Medium vegetation', color: '#4f9e4a' },
-  5: { name: 'High vegetation', color: '#2f7d3c' },
-  6: { name: 'Building', color: '#e0664a' },
+  0: { name: 'Never classified', color: '#6c7a99' },
+  1: { name: 'Unclassified', color: '#6c7a99' },
+  2: { name: 'Ground', color: '#3b2f8f' },
+  3: { name: 'Low vegetation', color: '#1fd6a0' },
+  4: { name: 'Medium vegetation', color: '#15b889' },
+  5: { name: 'High vegetation', color: '#0e9a74' },
+  6: { name: 'Building', color: '#ff4fa3' },
   7: { name: 'Low noise', color: '#d94fd1' },
   8: { name: 'Key point', color: '#f2d24b' },
-  9: { name: 'Water', color: '#3f8ee8' },
+  9: { name: 'Water', color: '#1f8bff' },
   10: { name: 'Rail', color: '#c9a227' },
-  11: { name: 'Road surface', color: '#5c5f66' },
+  11: { name: 'Road surface', color: '#8c7bd9' },
   12: { name: 'Overlap', color: '#a0a0a0' },
   13: { name: 'Wire guard', color: '#f2f2f2' },
   14: { name: 'Wire conductor', color: '#ffe066' },
   15: { name: 'Transmission tower', color: '#ff9f43' },
   16: { name: 'Wire connector', color: '#fffbe6' },
-  17: { name: 'Bridge deck', color: '#c2a3ff' },
+  17: { name: 'Bridge deck', color: '#ffd166' },
   18: { name: 'High noise', color: '#ff4fd8' },
 };
 
@@ -39,9 +39,9 @@ function classTexture(hidden: Set<number>): THREE.DataTexture {
   return t;
 }
 
-// Height ramp: deep blue (low) through teal, green, yellow to white (high), like a survey hypsometric tint.
+// Night-flight height ramp: indigo ground, violet and magenta through the middle, then cyan and white-hot tops.
 function rampTexture(): THREE.DataTexture {
-  const stops = ['#1b2a6b', '#1f6f9f', '#25a39a', '#7cc86a', '#e6d65a', '#f0a04b', '#fdf6e3'];
+  const stops = ['#1a0b45', '#4a1a9e', '#a02bd1', '#ff3fa4', '#19c6e6', '#8ff6ff', '#ffffff'];
   const data = new Uint8Array(256 * 4);
   for (let i = 0; i < 256; i++) {
     const t = (i / 255) * (stops.length - 1);
@@ -68,6 +68,10 @@ export function pointMaterial(): THREE.ShaderMaterial {
       classes: { value: classTexture(new Set()) },
       ramp: { value: rampTexture() },
       hasRgb: { value: false },
+      time: { value: 0 },
+      born: { value: -100 },          // when the node being drawn arrived, for the materialise flash
+      sweep: { value: new THREE.Vector4(0, 0, 1, 0) }, // xy: direction, z: width, w: position along it
+      sweepOn: { value: true },
     },
     vertexShader: /* glsl */ `
       attribute float classification;
@@ -82,6 +86,10 @@ export function pointMaterial(): THREE.ShaderMaterial {
       uniform sampler2D classes;
       uniform sampler2D ramp;
       uniform bool hasRgb;
+      uniform float time;
+      uniform float born;
+      uniform vec4 sweep;
+      uniform bool sweepOn;
       varying vec3 vColor;
       varying float vHidden;
       void main() {
@@ -89,6 +97,7 @@ export function pointMaterial(): THREE.ShaderMaterial {
         vHidden = cls.a < 0.5 ? 1.0 : 0.0;
         if (colorMode == 0) {
           float h = clamp((position.z - zRange.x) / max(zRange.y - zRange.x, 0.001), 0.0, 1.0);
+          h = pow(h, 0.65); // most of a city is near the ground: give the low end more of the ramp
           vColor = texture2D(ramp, vec2(h, 0.5)).rgb;
         } else if (colorMode == 1) {
           vColor = cls.rgb;
@@ -98,6 +107,15 @@ export function pointMaterial(): THREE.ShaderMaterial {
         } else {
           vColor = hasRgb ? rgb : cls.rgb;
         }
+        // radar sweep: a soft band of light passing across the city
+        if (sweepOn) {
+          float d = dot(position.xy, sweep.xy) - sweep.w;
+          float band = exp(-d * d / (sweep.z * sweep.z));
+          vColor += vec3(0.35, 0.95, 1.0) * band * 0.55;
+        }
+        // newly streamed detail materialises from a cyan flash
+        float age = clamp((time - born) / 0.9, 0.0, 1.0);
+        vColor = mix(vec3(0.55, 1.0, 1.0), vColor, age * age);
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         gl_Position = projectionMatrix * mv;
         // big enough to cover the gap to the next sample in this node, never smaller than 1.5 px
@@ -138,7 +156,7 @@ export class EyeDome {
         near: { value: 0.1 },
         far: { value: 10000 },
         strength: { value: 1.0 },
-        background: { value: new THREE.Color('#0b0e14') },
+        background: { value: new THREE.Color('#05060f') },
         enabled: { value: true },
       },
       vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
@@ -161,7 +179,13 @@ export class EyeDome {
         void main() {
           float d = texture2D(tDepth, vUv).x;
           vec3 color = texture2D(tColor, vUv).rgb;
-          if (d >= 1.0) { gl_FragColor = vec4(background, 1.0); return; }
+          vec2 cv = vUv - 0.5;
+          float vignette = 1.0 - dot(cv, cv) * 0.9;
+          if (d >= 1.0) {
+            vec3 sky = mix(background, vec3(0.05, 0.03, 0.16), smoothstep(0.0, 1.0, vUv.y));
+            gl_FragColor = vec4(sky * vignette, 1.0);
+            return;
+          }
           if (!enabled) { gl_FragColor = vec4(color, 1.0); return; }
           float here = logDepth(vUv);
           vec2 px = 1.4 / resolution;
@@ -172,7 +196,7 @@ export class EyeDome {
             sum += n == 0.0 ? 0.6 : max(0.0, here - n);
           }
           float shade = exp(-sum / 8.0 * 300.0 * strength * 0.02);
-          gl_FragColor = vec4(color * shade, 1.0);
+          gl_FragColor = vec4(color * shade * vignette, 1.0);
         }`,
       depthTest: false,
       depthWrite: false,
