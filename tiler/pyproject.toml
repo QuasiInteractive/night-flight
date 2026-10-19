@@ -1,0 +1,20 @@
+[project]
+name = "tiler"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Nick", email = "lucidcubex@proton.me" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "laspy[lazrs]>=2.7.0",
+    "numpy>=2.5.4",
+]
+
+[project.scripts]
+tiler = "tiler:main"
+
+[build-system]
+requires = ["uv_build>=0.12.16,<0.13.0"]
+build-backend = "uv_build"

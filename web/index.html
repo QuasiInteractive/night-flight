@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LiDAR viewer</title>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <aside id="panel">
+    <h1>LiDAR viewer</h1>
+    <p class="sub"><span id="pointsTotal">–</span> points · <span id="crs"></span></p>
+    <h2>Colour by</h2>
+    <div id="modes" class="seg"></div>
+    <div id="legend" hidden></div>
+    <h2>Tools</h2>
+    <div class="seg"><button id="measureBtn">Measure</button><button id="home">Reset view</button></div>
+    <div id="measureOut" hidden></div>
+    <h2>Display</h2>
+    <label class="row"><input type="checkbox" id="edl" checked> Depth shading (EDL)</label>
+    <label class="row">Point budget <input type="range" id="budget" min="1" max="12" step="1" value="4"> <span id="budgetOut">4M</span></label>
+    <label class="row">Point size <input type="range" id="size" min="0.4" max="2.5" step="0.1" value="1"></label>
+    <p class="hint">Drag to orbit · right-drag to pan · scroll to zoom · double-click to centre on a spot</p>
+  </aside>
+  <footer id="stats">loading…</footer>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
